@@ -1,0 +1,4 @@
+<resources>
+
+    <style name="Theme.SimpleSignage" parent="Theme.AppCompat.DayNight.NoActionBar" />
+</resources>
