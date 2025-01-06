@@ -1,27 +1,22 @@
 package com.noryangjin.simplesignage
 
 import android.annotation.SuppressLint
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.*
+import kotlinx.coroutines.delay
 import java.time.LocalDate
 import java.time.YearMonth
-import java.time.format.TextStyle
-import java.util.*
-import kotlin.math.min
 
 @SuppressLint("NewApi")
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -32,10 +27,21 @@ fun CalendarScreen() {
     var selectedDate by remember { mutableStateOf(today) }
     var focusedDate by remember { mutableStateOf(today) }
 
+    val initialFocusRequester = remember { FocusRequester() }
+    val monthChangeFocusRequester = remember { FocusRequester() }
+
+    // 초기 포커스 설정
     LaunchedEffect(Unit) {
-        focusedDate = today
-        selectedDate = today
-        currentYearMonth = YearMonth.from(today)
+        delay(10)
+        initialFocusRequester.requestFocus()
+    }
+
+    // 달 변경 시 포커스 설정
+    LaunchedEffect(focusedDate) {
+        if (focusedDate != today) {  // 초기 로딩이 아닐 때만
+            delay(10)  // 리컴포지션 완료를 위한 딜레이
+            monthChangeFocusRequester.requestFocus()
+        }
     }
 
     val holidays = remember {
@@ -70,14 +76,12 @@ fun CalendarScreen() {
                 .align(Alignment.Center),
             verticalArrangement = Arrangement.Top
         ) {
-            // 월 표시
             Text(
                 text = "${currentYearMonth.year}년 ${currentYearMonth.monthValue}월",
-                style = MaterialTheme.typography.headlineLarge,  // 글자 크기 증가
+                style = MaterialTheme.typography.headlineLarge,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
 
-            // 요일 헤더
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly
@@ -86,7 +90,7 @@ fun CalendarScreen() {
                 daysOfWeek.forEach { day ->
                     Text(
                         text = day,
-                        style = MaterialTheme.typography.titleLarge,  // 글자 크기 증가
+                        style = MaterialTheme.typography.titleLarge,
                         color = when (day) {
                             "일" -> Color.Red
                             "토" -> Color.Blue
@@ -97,32 +101,31 @@ fun CalendarScreen() {
                 }
             }
 
-            // 달력 그리드
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    // 달력 데이터 준비
-                    val weeks = mutableListOf<List<LocalDate>>()
                     val firstDayOfMonth = currentYearMonth.atDay(1)
+                    val lastDayOfMonth = currentYearMonth.atEndOfMonth()
                     val firstDayOfWeek = firstDayOfMonth.dayOfWeek.value % 7
 
-                    // 첫 주 시작일 계산
+                    val totalDays = firstDayOfWeek + lastDayOfMonth.dayOfMonth
+                    val numberOfWeeks = ((totalDays + 6) / 7)
+
                     var currentDate = firstDayOfMonth.minusDays(firstDayOfWeek.toLong())
 
-                    // 5주 분량의 날짜 생성
-                    repeat(5) { weekIndex ->
+                    val weeks = mutableListOf<List<LocalDate>>()
+                    repeat(numberOfWeeks) {
                         val week = mutableListOf<LocalDate>()
-                        repeat(7) { dayIndex ->
+                        repeat(7) {
                             week.add(currentDate)
                             currentDate = currentDate.plusDays(1)
                         }
                         weeks.add(week)
                     }
 
-                    // 각 주를 Row로 표시
                     weeks.forEach { week ->
                         Row(
                             modifier = Modifier
@@ -150,12 +153,55 @@ fun CalendarScreen() {
                                                 currentYearMonth = YearMonth.from(date)
                                             }
                                         },
-                                        onMonthChange = { change ->
-                                            currentYearMonth = currentYearMonth.plusMonths(change.toLong())
-                                            val newDate = currentYearMonth.atDay(min(currentYearMonth.lengthOfMonth(), date.dayOfMonth))
+                                        onDateChange = { date, direction, keyEvent ->
+                                            val newYearMonth = when (direction) {
+                                                DateChangeDirection.PREV -> currentYearMonth.minusMonths(1)
+                                                DateChangeDirection.NEXT -> currentYearMonth.plusMonths(1)
+                                            }
+
+                                            val dayOfWeek = date.dayOfWeek  // 현재 요일 저장
+
+                                            val newDate = when {
+                                                // DPAD_LEFT: 1일에서 이전 달 말일로
+                                                keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT &&
+                                                        date.dayOfMonth == 1 -> {
+                                                    newYearMonth.atEndOfMonth()
+                                                }
+                                                // DPAD_RIGHT: 말일에서 다음 달 1일로
+                                                keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT &&
+                                                        date.dayOfMonth == date.lengthOfMonth() -> {
+                                                    newYearMonth.atDay(1)
+                                                }
+                                                // DPAD_UP: 첫 주에서 이전 달의 같은 요일로
+                                                keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP &&
+                                                        date.dayOfMonth <= 7 -> {
+                                                    val lastDayOfPrevMonth = newYearMonth.atEndOfMonth()
+                                                    var targetDate = lastDayOfPrevMonth.minusDays(7)  // 마지막 주가 아닌 그 전 주의 같은 요일
+                                                    while (targetDate.dayOfWeek != dayOfWeek) {
+                                                        targetDate = targetDate.plusDays(1)
+                                                    }
+                                                    targetDate
+                                                }
+                                                // DPAD_DOWN: 마지막 주나 말일에서 다음 달의 같은 요일로
+                                                ((keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN &&
+                                                        date.dayOfMonth > date.lengthOfMonth() - 7) ||
+                                                        (keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN &&
+                                                                date.dayOfMonth == date.lengthOfMonth())) -> {
+                                                    var targetDate = newYearMonth.atDay(1)
+                                                    while (targetDate.dayOfWeek != dayOfWeek) {
+                                                        targetDate = targetDate.plusDays(1)
+                                                    }
+                                                    targetDate
+                                                }
+                                                else -> date
+                                            }
+
+                                            currentYearMonth = newYearMonth
                                             selectedDate = newDate
                                             focusedDate = newDate
-                                        }
+                                        },
+                                        initialFocusRequester = if (date == today) initialFocusRequester else null,
+                                        monthChangeFocusRequester = if (date == focusedDate) monthChangeFocusRequester else null
                                     )
                                 }
                             }
@@ -167,6 +213,9 @@ fun CalendarScreen() {
     }
 }
 
+enum class DateChangeDirection {
+    PREV, NEXT
+}
 
 @SuppressLint("NewApi")
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -179,9 +228,10 @@ fun CalendarDay(
     isCurrentMonth: Boolean,
     holidays: Map<String, String>,
     onDateSelected: () -> Unit,
-    onMonthChange: (Int) -> Unit,
+    onDateChange: (LocalDate, DateChangeDirection, KeyEvent) -> Unit,
     enabled: Boolean = true,
-
+    initialFocusRequester: FocusRequester? = null,
+    monthChangeFocusRequester: FocusRequester? = null
 ) {
     val dateString = "${date.year}-${String.format("%02d", date.monthValue)}-${String.format("%02d", date.dayOfMonth)}"
     val isHoliday = holidays.containsKey(dateString)
@@ -196,31 +246,57 @@ fun CalendarDay(
         modifier = Modifier
             .fillMaxSize()
             .padding(4.dp)
+            .let {
+                when {
+                    initialFocusRequester != null -> it.focusRequester(initialFocusRequester)
+                    monthChangeFocusRequester != null -> it.focusRequester(monthChangeFocusRequester)
+                    else -> it
+                }
+            }
             .onFocusChanged { focusState ->
-                if (focusState.isFocused && date.monthValue == currentYearMonth.monthValue) {
+                if (focusState.isFocused && isCurrentMonth) {
                     onDateSelected()
                 }
             }
+            .focusProperties {
+                left = FocusRequester.Default
+                right = FocusRequester.Default
+                up = FocusRequester.Default
+                down = FocusRequester.Default
+            }
             .onPreviewKeyEvent { keyEvent ->
                 when {
-                    ((date.dayOfMonth <= 7 && keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP) ||
-                            (date.dayOfMonth == 1 && keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT)) -> {
+                    keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP &&
+                            date.dayOfMonth <= 7 -> {
                         if (keyEvent.type == KeyEventType.KeyDown) {
-                            onMonthChange(-1)
+                            onDateChange(date, DateChangeDirection.PREV, keyEvent)
                             true
                         } else false
                     }
-                    ((date.dayOfMonth > date.lengthOfMonth() - 7 && keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) ||
-                            (date.dayOfMonth == date.lengthOfMonth() && keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT)) -> {
+                    keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN &&
+                            date.dayOfMonth > date.lengthOfMonth() - 7 -> {
                         if (keyEvent.type == KeyEventType.KeyDown) {
-                            onMonthChange(1)
+                            onDateChange(date, DateChangeDirection.NEXT, keyEvent)
+                            true
+                        } else false
+                    }
+                    keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT &&
+                            date.dayOfMonth == 1 -> {
+                        if (keyEvent.type == KeyEventType.KeyDown) {
+                            onDateChange(date, DateChangeDirection.PREV, keyEvent)
+                            true
+                        } else false
+                    }
+                    keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT &&
+                            date.dayOfMonth == date.lengthOfMonth() -> {
+                        if (keyEvent.type == KeyEventType.KeyDown) {
+                            onDateChange(date, DateChangeDirection.NEXT, keyEvent)
                             true
                         } else false
                     }
                     else -> false
                 }
-            }
-        ,
+            },
         shape = ButtonDefaults.shape(
             shape = RoundedCornerShape(4.dp)
         ),
